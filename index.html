@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <meta name="theme-color" content="#0ea5e9"/>
+  <link rel="manifest" href="manifest.webmanifest"/>
+  <title>Проверка координат — POI</title>
+  <style>
+    :root { color-scheme: light; --bg:#f8fafc; --card:#ffffff; --muted:#64748b; --text:#0f172a;
+            --green:#dcfce7; --red:#fee2e2; --yellow:#fef3c7; --border:#e2e8f0; --primary:#0284c7; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+           background:var(--bg); color:var(--text); }
+    .container { max-width: 720px; margin: 0 auto; padding: 16px; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:12px; }
+    .row { display:flex; gap:12px; align-items:center; }
+    h1 { font-size: 20px; margin:0 0 4px 0; }
+    .muted { color:var(--muted); font-size:14px; }
+    label { font-size:14px; }
+    input[type="text"], textarea, select { width:100%; padding:10px 12px; border:1px solid var(--border);
+      border-radius:12px; font-size:14px; background:#f8fafc; color:var(--text); }
+    textarea { height:180px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .btn { border:none; border-radius:12px; padding:10px 14px; font-size:14px; cursor:pointer; }
+    .btn-primary { background:var(--primary); color:#fff; }
+    .btn-ghost { background:#eef2f7; color:var(--text); border:1px solid var(--border); }
+    .grid { display:grid; gap:12px; }
+    .grid-2 { grid-template-columns:1fr 1fr; }
+    .chip { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid var(--border); border-radius:12px; background:#f8fafc; }
+    .results .item { display:flex; gap:12px; align-items:center; padding:10px 12px; }
+    .results .ok { background: var(--green); }
+    .results .bad { background: var(--red); }
+    .results .error { background: var(--yellow); }
+    .small { font-size:12px; }
+    .header { display:flex; gap:12px; align-items:center; }
+    .header .icon { width:32px; height:32px; border-radius:12px; background:#e2e8f0; display:flex; align-items:center; justify-content:center; }
+    .topbar { display:flex; justify-content:space-between; align-items:center; }
+    .ticks { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); }
+    .spacer { height:8px; }
+    .divider { height:1px; background:var(--border); margin:8px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="icon">📍</div>
+      <div>
+        <h1>Проверка координат</h1>
+        <div class="muted" id="hdr">Прямой доступ к Яндекс.Картам • Радиус: <b id="hdrRadius">50</b> м</div>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <!-- Блок настроек -->
+    <div class="card">
+      <div class="topbar">
+        <div class="row"><strong>Настройки</strong></div>
+        <button class="btn btn-ghost" id="installBtn" style="display:none;">📲 Установить</button>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Радиус</label>
+          <input type="range" id="radiusSlider" min="0" max="3" step="1" value="2"/>
+          <div class="ticks"><span>10м</span><span>25м</span><span><b>50м</b></span><span>100м</span></div>
+        </div>
+
+        <div>
+          <div class="small muted">Типы объектов:</div>
+          <div class="grid grid-2" id="cats"></div>
+        </div>
+
+        <div class="card" style="background:#f8fafc;">
+          <div class="row"><strong>Пресеты</strong></div>
+          <div class="grid">
+            <div class="row" style="gap:8px;">
+              <input type="text" id="presetName" placeholder="Название" />
+              <button class="btn btn-primary" id="savePreset">💾 Сохранить</button>
+            </div>
+            <div class="row" style="gap:8px;">
+              <select id="presetSelect"><option value="">Выберите…</option></select>
+              <button class="btn btn-ghost" id="deletePreset">🗑️ Удалить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <!-- Ввод координат -->
+    <div class="card">
+      <div class="row"><span>ℹ️</span><div class="muted">Вводите по строке: <code>lat, lon</code>. Распознано: <span id="parsedCount">0</span>/<span id="totalCount">0</span></div></div>
+      <div class="spacer"></div>
+      <textarea id="coords" placeholder="55.751244, 37.618423
+55.760000, 37.620000"></textarea>
+      <div class="spacer"></div>
+      <div class="row" style="flex-wrap:wrap; gap:8px;">
+        <button class="btn btn-primary" id="checkBtn">Проверить</button>
+        <button class="btn btn-ghost" id="clearBtn">Очистить</button>
+        <button class="btn btn-ghost" id="exportBtn" disabled>Экспорт CSV</button>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <!-- Результаты -->
+    <div class="card" id="resultsCard" style="display:none;">
+      <div class="row"><strong>Результаты</strong></div>
+      <div class="divider"></div>
+      <div class="results" id="results"></div>
+    </div>
+
+    <div class="spacer"></div>
+    <div class="small muted">
+      PWA: для iOS — «Поделиться» → «На экран домой». Для Android — появится кнопка «Установить».
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ---- Константы и состояние ----
+  const RADIUS_STEPS = [10, 25, 50, 100];
+  const DEFAULT_CATEGORIES = [
+    { key: 'school',       label:'Школы',         queries:['школа','лицей','гимназия'] },
+    { key: 'kindergarten', label:'Детские сады',  queries:['детский сад','ясли'] },
+    { key: 'police',       label:'Полиция',       queries:['полиция','отдел полиции'] },
+    { key: 'kids_club',    label:'Детские секции',queries:['детская секция','детский кружок','детский клуб','ДЮСШ'] },
+    { key: 'court',        label:'Суды',          queries:['суд','мировой суд','районный суд'] },
+  ];
+  const API_KEY = 'b70428e4-77f9-42fb-8d22-5c9834aa214f'; // Твой ключ Яндекса
+
+  const LS_CATS = 'poi_categories';
+  const LS_RADIUS = 'poi_radius';
+  const LS_PRESETS = 'poi_presets';
+
+  let enabledKeys = [...DEFAULT_CATEGORIES.map(c => c.key)];
+  let radius = 50;
+  let presets = [];
+  let rows = []; // последние результаты для экспорта
+
+  // ---- Утилиты ----
+  const $ = (id) => document.getElementById(id);
+  const toRad = (v) => (v * Math.PI) / 180;
+  const haversineMeters = (lat1, lon1, lat2, lon2) => {
+    const R = 6371000;
+    const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+    return 2*R*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  };
+  const metersToDegreeSpan = (lat, meters) => {
+    const dLat = meters / 111320;
+    const dLon = meters / (111320 * Math.cos((lat*Math.PI)/180) || 1e-6);
+    return { dLat: dLat*2.2, dLon: dLon*2.2 };
+  };
+  const parsePoint = (line) => {
+    if (!line) return null;
+    const raw = line.replace(/[;\\t]/g, ',').replace(/\\s+/g, ' ').trim().replace(/\\s*,\\s*/g, ',');
+    const m = raw.match(/^(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)(?:\\s*\\(.+\\))?$/);
+    if (!m) return null;
+    let a = parseFloat(m[1]), b = parseFloat(m[2]);
+    let lat, lon;
+    if (Math.abs(a) > 90 && Math.abs(b) <= 90) { lon=a; lat=b; } else { lat=a; lon=b; }
+    if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat)>90 || Math.abs(lon)>180) return null;
+    return { lat, lon };
+  };
+
+  // ---- Инициализация UI ----
+  function renderCats() {
+    const wrap = $('cats'); wrap.innerHTML = '';
+    DEFAULT_CATEGORIES.forEach(cat => {
+      const label = document.createElement('label');
+      label.className = 'chip';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = enabledKeys.includes(cat.key);
+      input.onchange = () => {
+        if (input.checked) enabledKeys = [...enabledKeys, cat.key];
+        else enabledKeys = enabledKeys.filter(k => k !== cat.key);
+        localStorage.setItem(LS_CATS, JSON.stringify(enabledKeys));
+      };
+      const span = document.createElement('span'); span.textContent = cat.label;
+      label.append(input, span);
+      wrap.appendChild(label);
+    });
+  }
+
+  function loadFromStorage() {
+    const cats = localStorage.getItem(LS_CATS);
+    if (cats) { try { enabledKeys = JSON.parse(cats); } catch{} }
+    const rad = localStorage.getItem(LS_RADIUS);
+    if (rad) radius = parseInt(rad,10) || 50;
+    const pr = localStorage.getItem(LS_PRESETS);
+    if (pr) { try { presets = JSON.parse(pr); } catch{} }
+  }
+
+  function renderPresetSelect() {
+    const sel = $('presetSelect');
+    sel.innerHTML = '<option value="">Выберите…</option>';
+    presets.forEach(p => {
+      const o = document.createElement('option');
+      o.value = p.name; o.textContent = `${p.name} — ${p.radius}м`;
+      sel.appendChild(o);
+    });
+  }
+
+  function setRadius(r) {
+    radius = r;
+    localStorage.setItem(LS_RADIUS, String(r));
+    $('hdrRadius').textContent = String(r);
+  }
+
+  function updateCounts() {
+    const lines = $('coords').value.split(/\\n+/).map(s=>s.trim()).filter(Boolean);
+    $('totalCount').textContent = String(lines.length);
+    const parsed = lines.reduce((acc, l)=> acc + (parsePoint(l)?1:0), 0);
+    $('parsedCount').textContent = String(parsed);
+  }
+
+  function showResults(list) {
+    rows = list.slice();
+    const card = $('resultsCard');
+    const wrap = $('results'); wrap.innerHTML = '';
+    if (!rows.length) { card.style.display='none'; return; }
+    card.style.display='block';
+    rows.forEach(r => {
+      const d = document.createElement('div');
+      d.className = `item ${r.status}`;
+      const icon = r.status==='ok' ? '✅' : (r.status==='bad' ? '❌' : '⚠️');
+      const line = document.createElement('div'); line.style.flex='1';
+      line.innerHTML = `<div style="font-family:ui-monospace,monospace;font-size:13px">${r.line}</div>
+        <div class="small">
+          ${
+            r.status==='ok'    ? (r.minDist!=null?`Ближайший объект: ${Math.round(r.minDist)} м${r.nearest?` — ${r.nearest}`:''}`:'Нет данных') :
+            r.status==='bad'   ? `Обнаружен объект ближе ${radius} м: ${Math.round(r.minDist||0)} м${r.nearest?` — ${r.nearest}`:''}` :
+                                 (r.details||'Ошибка запроса')
+          }
+        </div>`;
+      const iconBox = document.createElement('div'); iconBox.style.width='24px'; iconBox.textContent = icon;
+      d.append(iconBox, line);
+      wrap.appendChild(d);
+    });
+    $('exportBtn').disabled = rows.length===0;
+  }
+
+  // ---- Проверка точек ----
+  async function checkPoints() {
+    const lines = $('coords').value.split(/\\n+/).map(s=>s.trim()).filter(Boolean);
+    const results = [];
+    $('checkBtn').disabled = true;
+    $('checkBtn').textContent = 'Проверяю…';
+
+    try {
+      for (let i=0; i<lines.length; i++) {
+        const raw = lines[i];
+        const pt = parsePoint(raw);
+        if (!pt) { results.push({ index:i, line:raw, status:'error', details:'Не распознаны координаты' }); continue; }
+        const { lat, lon } = pt;
+        const { dLat, dLon } = metersToDegreeSpan(lat, radius);
+
+        let minDist = Infinity; let nearest;
+        for (const cat of DEFAULT_CATEGORIES.filter(c=>enabledKeys.includes(c.key))) {
+          for (const q of cat.queries) {
+            try {
+              const params = new URLSearchParams({
+                apikey: API_KEY,
+                lang: 'ru_RU',
+                type: 'biz',
+                ll: `${lon},${lat}`,
+                spn: `${Math.max(dLon,1e-5)},${Math.max(dLat,1e-5)}`,
+                results: '50',
+                text: q,
+              });
+              const resp = await fetch(`https://search-maps.yandex.ru/v1/?${params.toString()}`);
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              const data = await resp.json();
+              const feats = data?.features || [];
+              for (const f of feats) {
+                const coords = f?.geometry?.coordinates; // [lon, lat]
+                if (!coords) continue;
+                const d = haversineMeters(lat, lon, coords[1], coords[0]);
+                if (d < minDist) {
+                  minDist = d;
+                  const name = f?.properties?.name || f?.properties?.CompanyMetaData?.name;
+                  const catName = f?.properties?.CompanyMetaData?.Categories?.[0]?.name;
+                  nearest = name ? (name + (catName ? ` (${catName})` : '')) : undefined;
+                }
+              }
+            } catch (e) {
+              // Игнорируем; ниже агрегированно покажем
+            }
+            if (minDist <= radius) break;
+          }
+          if (minDist <= radius) break;
+        }
+
+        if (!isFinite(minDist)) { results.push({ index:i, line:raw, status:'error', details:'Нет ответа от API' }); continue; }
+        if (minDist <= radius) results.push({ index:i, line:raw, status:'bad', nearest, minDist });
+        else results.push({ index:i, line:raw, status:'ok', nearest, minDist });
+      }
+    } finally {
+      $('checkBtn').disabled = false;
+      $('checkBtn').textContent = 'Проверить';
+    }
+
+    results.sort((a,b)=>a.index-b.index);
+    showResults(results);
+  }
+
+  // ---- Экспорт CSV ----
+  function exportCSV() {
+    if (!rows.length) return;
+    const header = 'index,line,status,minDist,nearest\\n';
+    const body = rows.map(r => [
+      r.index,
+      `\"${String(r.line).replaceAll('\"','\"\"')}\"`,
+      r.status,
+      r.minDist ?? '',
+      r.nearest ? `\"${String(r.nearest).replaceAll('\"','\"\"')}\"` : ''
+    ].join(',')).join('\\n');
+    const csv = header + body;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'poi_results.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ---- Пресеты ----
+  function savePreset() {
+    const name = $('presetName').value.trim(); if (!name) return;
+    const preset = { name, radius, enabledKeys };
+    presets = [...presets.filter(p=>p.name!==name), preset];
+    localStorage.setItem(LS_PRESETS, JSON.stringify(presets));
+    renderPresetSelect();
+    $('presetSelect').value = name;
+    $('presetName').value = '';
+  }
+  function applyPreset() {
+    const name = $('presetSelect').value;
+    const p = presets.find(x=>x.name===name); if (!p) return;
+    enabledKeys = p.enabledKeys.slice();
+    setRadius(p.radius);
+    // обновим UI
+    $('radiusSlider').value = String(Math.max(0, RADIUS_STEPS.indexOf(p.radius)));
+    renderCats();
+  }
+  function deletePreset() {
+    const name = $('presetSelect').value; if (!name) return;
+    presets = presets.filter(p=>p.name!==name);
+    localStorage.setItem(LS_PRESETS, JSON.stringify(presets));
+    renderPresetSelect();
+  }
+
+  // ---- PWA Установка ----
+  let deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    $('installBtn').style.display = 'inline-block';
+  });
+  $('installBtn').addEventListener('click', async () => {
+    if (deferredPrompt) { await deferredPrompt.prompt(); $('installBtn').style.display = 'none'; }
+  });
+
+  // ---- Слушатели ----
+  $('coords').addEventListener('input', updateCounts);
+  $('checkBtn').addEventListener('click', checkPoints);
+  $('clearBtn').addEventListener('click', () => { $('coords').value=''; updateCounts(); showResults([]); });
+  $('exportBtn').addEventListener('click', exportCSV);
+  $('savePreset').addEventListener('click', savePreset);
+  $('presetSelect').addEventListener('change', applyPreset);
+  $('deletePreset').addEventListener('click', deletePreset);
+
+  $('radiusSlider').addEventListener('input', (e) => {
+    const idx = parseInt(e.target.value, 10);
+    const r = RADIUS_STEPS[idx] ?? 50;
+    setRadius(r);
+  });
+
+  // ---- Старт ----
+  loadFromStorage();
+  renderCats();
+  renderPresetSelect();
+  const idx = Math.max(0, RADIUS_STEPS.indexOf(radius));
+  $('radiusSlider').value = String(idx);
+  setRadius(radius);
+  updateCounts();
+
+  // Регистрируем service worker (для PWA)
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+  }
+})();
+</script>
+</body>
+</html>
