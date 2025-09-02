@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <meta name="theme-color" content="#0ea5e9"/>
   <link rel="manifest" href="manifest.webmanifest"/>
-  <title>Проверка координат — POI (2ГИС) v1.1 (OCR)</title>
-
-  <!-- UI стили -->
+  <title>Проверка координат — POI (2ГИС)</title>
   <style>
     :root { color-scheme: light; --bg:#f8fafc; --card:#ffffff; --muted:#64748b; --text:#0f172a;
             --green:#dcfce7; --red:#fee2e2; --yellow:#fef3c7; --border:#e2e8f0; --primary:#0284c7; }
@@ -19,7 +17,7 @@
     .row { display:flex; gap:12px; align-items:center; }
     h1 { font-size: 20px; margin:0 0 4px 0; }
     .muted { color:var(--muted); font-size:14px; }
-    input[type="text"], textarea, select, input[type="file"] { width:100%; padding:10px 12px; border:1px solid var(--border);
+    input[type="text"], textarea, select { width:100%; padding:10px 12px; border:1px solid var(--border);
       border-radius:12px; font-size:14px; background:#f8fafc; color:var(--text); }
     textarea { height:180px; font-family: ui-monospace, monospace; }
     .btn { border:none; border-radius:12px; padding:10px 14px; font-size:14px; cursor:pointer; }
@@ -39,25 +37,20 @@
     .ticks { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); }
     .spacer { height:8px; }
     .divider { height:1px; background:var(--border); margin:8px 0; }
-    code { background:#eef2f7; padding:2px 6px; border-radius:8px; }
   </style>
-
-  <!-- OCR движок (офлайн, WebAssembly) -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 </head>
 <body>
   <div class="container">
     <div class="header">
       <div class="icon">📍</div>
       <div>
-        <h1>Проверка координат (2ГИС) — v1.1 (OCR)</h1>
-        <div class="muted">Радиус: <b id="hdrRadius">50</b> м • Прямой вызов API • OCR с фото</div>
+        <h1>Проверка координат (2ГИС)</h1>
+        <div class="muted">Радиус: <b id="hdrRadius">50</b> м • Прямой вызов API</div>
       </div>
     </div>
 
     <div class="spacer"></div>
 
-    <!-- Настройки -->
     <div class="card">
       <div class="topbar">
         <div class="row"><strong>Настройки</strong></div>
@@ -76,36 +69,13 @@
           <div class="grid grid-2" id="cats"></div>
         </div>
 
-        <!-- Пресеты: скрыты, код сохранён на будущее -->
+        <!-- Пресеты: скрыты, но код сохранён -->
         <div id="presetsCard" class="card" style="display:none;"></div>
       </div>
     </div>
 
     <div class="spacer"></div>
 
-    <!-- Фото -> Координаты (OCR) -->
-    <div class="card">
-      <div class="row">
-        <strong>Фото → координаты (OCR)</strong>
-      </div>
-      <div class="small muted">
-        Загрузите 50–100 фото. Программа прочитает координаты, написанные на изображениях, добавит их в список ниже.
-      </div>
-      <div class="spacer"></div>
-      <div class="grid">
-        <input id="photosInput" type="file" accept="image/*" multiple />
-        <div class="row" style="gap:8px; flex-wrap:wrap;">
-          <button class="btn btn-primary" id="ocrStartBtn">📷 Считать координаты</button>
-          <button class="btn btn-ghost" id="ocrClearBtn">Очистить результаты OCR</button>
-        </div>
-        <div id="ocrProgress" class="small muted" style="display:none;">Подготовка…</div>
-        <div id="ocrFound" class="small"></div>
-      </div>
-    </div>
-
-    <div class="spacer"></div>
-
-    <!-- Ввод координат вручную/из буфера -->
     <div class="card">
       <div class="row"><span>ℹ️</span><div class="muted">Вводите по строке: <code>lat, lon</code>. Распознано: <span id="parsedCount">0</span>/<span id="totalCount">0</span></div></div>
       <div class="spacer"></div>
@@ -121,7 +91,6 @@
 
     <div class="spacer"></div>
 
-    <!-- Результаты -->
     <div class="card" id="resultsCard" style="display:none;">
       <div class="row"><strong>Результаты</strong></div>
       <div class="divider"></div>
@@ -136,27 +105,20 @@
 
 <script>
 (() => {
-  // ========= Константы/состояние =========
-  const DGIS_API_KEY = '29be9032-3273-4d3c-88a4-6064edb8d02b'; // 2ГИС (без прокси, как просил)
+  const DGIS_API_KEY = '29be9032-3273-4d3c-88a4-6064edb8d02b';
   const RADIUS_STEPS = [10, 25, 50, 100];
   const DEFAULT_CATEGORIES = [
-    { key: 'school',       label:'Школы',         queries:['школа','лицей','гимназия'] },
-    { key: 'kindergarten', label:'Детские сады',  queries:['детский сад','ясли'] },
-    { key: 'police',       label:'Полиция',       queries:['полиция','отдел полиции'] },
-    { key: 'kids_club',    label:'Детские секции',queries:['детская секция','детский кружок','детский клуб','ДЮСШ'] },
-    { key: 'court',        label:'Суды',          queries:['суд','мировой суд','районный суд'] },
+    { key: 'school', label:'Школы', queries:['школа','лицей','гимназия'] },
+    { key: 'kindergarten', label:'Детские сады', queries:['детский сад','ясли'] },
+    { key: 'police', label:'Полиция', queries:['полиция','отдел полиции'] },
+    { key: 'kids_club', label:'Детские секции', queries:['детская секция','детский кружок','детский клуб','ДЮСШ'] },
+    { key: 'court', label:'Суды', queries:['суд','мировой суд','районный суд'] },
   ];
-  const LS_CATS   = 'poi_categories';
-  const LS_RADIUS = 'poi_radius';
-  let enabledKeys = [...DEFAULT_CATEGORIES.map(c => c.key)];
-  let radius = 50;
-  let rows = []; // текущие результаты
 
-  // ========= Утилиты =========
   const $ = (id) => document.getElementById(id);
   const toRad = (v) => (v * Math.PI) / 180;
   const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
-  const jitter = (base)=> Math.floor(base + Math.random() * base);
+  const jitter = (base)=> Math.floor(base + Math.random()*base);
 
   const haversineMeters = (lat1, lon1, lat2, lon2) => {
     const R = 6371000;
@@ -165,12 +127,11 @@
     return 2*R*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   };
 
-  // Надежный парсер "55.12345, 37.12345" (+ вариации запятых/точек/символов)
   const parsePoint = (line) => {
     if (!line) return null;
-    let s = String(line).replace(/\u00A0/g, " ").replace(/[°]/g, " ");
-    s = s.replace(/(\d)\s*,\s*(?=\d)/g, "$1."); // десятичная запятая -> точка
-    s = s.replace(/[;,]/g, " ").replace(/\s+/g, " ").trim();
+    let s = String(line).replace(/\u00A0/g," ").replace(/[°]/g," ");
+    s = s.replace(/(\d)\s*,\s*(?=\d)/g, "$1.");
+    s = s.replace(/[;,]/g," ").replace(/\s+/g," ").trim();
     const nums = s.match(/-?\d+(?:\.\d+)?/g);
     if (!nums || nums.length < 2) return null;
     const a = parseFloat(nums[0]), b = parseFloat(nums[1]);
@@ -181,116 +142,39 @@
     return { lat, lon };
   };
 
-  // ========= Анти-бан 2ГИС (кэш + ретраи) =========
-  const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-  const CELL_DEG = 0.001; // ~111 м по широте
-  const BASE_DELAY_MS = 160;
-
-  const cacheKey = (q, lat, lon, radius) => {
-    const clat = Math.round(lat / CELL_DEG) * CELL_DEG;
-    const clon = Math.round(lon / CELL_DEG) * CELL_DEG;
-    return `2gis:${q}:${clat.toFixed(3)},${clon.toFixed(3)}:r${radius}`;
-  };
-  const cacheGet = (key) => {
-    try {
-      const raw = sessionStorage.getItem(key);
-      if (!raw) return null;
-      const obj = JSON.parse(raw);
-      if (!obj || !obj.t || !obj.data) return null;
-      if (Date.now() - obj.t > CACHE_TTL_MS) { sessionStorage.removeItem(key); return null; }
-      return obj.data;
-    } catch { return null; }
-  };
-  const cacheSet = (key, data) => {
-    try { sessionStorage.setItem(key, JSON.stringify({ t: Date.now(), data })); } catch {}
-  };
-
-  async function query2gis(q, lat, lon, r, pageSize=10) {
+  async function query2gis(q, lat, lon, radius) {
     const ps = new URLSearchParams({
-      q, type: 'branch', key: DGIS_API_KEY,
-      point: `${lon},${lat}`,
-      radius: String(Math.min(Math.max(r,1),3000)),
-      page_size: String(Math.min(Math.max(pageSize,1),10)),
-      sort: 'distance',
-      fields: 'items.point,items.rubrics,items.name',
+      q, type:'branch', key:DGIS_API_KEY,
+      point:`${lon},${lat}`,
+      radius:String(Math.min(Math.max(radius,1),3000)),
+      page_size:'10',
+      sort:'distance',
+      fields:'items.point,items.rubrics,items.name',
     });
     const url = `https://catalog.api.2gis.com/3.0/items?${ps.toString()}`;
     const resp = await fetch(url);
     if (!resp.ok) {
       let detail = `HTTP ${resp.status}`;
-      try { const err = await resp.json(); if (err?.error) detail += ` — ${err.error}`; } catch {}
-      const e = new Error(detail);
-      e.isHttp = true;
-      throw e;
+      try { const err = await resp.json(); if (err?.error) detail += ' — '+err.error; } catch{}
+      throw new Error(detail);
     }
     return resp.json();
   }
 
-  async function query2gisWithRetry(q, lat, lon, r, pageSize=10, maxAttempts=3) {
-    const key = cacheKey(q, lat, lon, r);
-    const cached = cacheGet(key);
-    if (cached) return { items: cached, cached: true };
-
-    let attempt = 0;
-    let lastErr = null;
-    while (attempt < maxAttempts) {
-      attempt++;
-      try {
-        const data = await query2gis(q, lat, lon, r, pageSize);
-        const items = data?.result?.items || data?.items || [];
-        cacheSet(key, items);
-        return { items, cached: false };
-      } catch (e) {
-        lastErr = e;
-        const msg = String(e?.message || '');
-        const is429 = msg.includes('429');
-        const is503 = msg.includes('503');
-        if ((is429 || is503) && attempt < maxAttempts) {
-          const wait = (500 * Math.pow(2, attempt-1)) + jitter(220);
-          await sleep(wait);
-          continue;
-        } else {
-          throw e;
-        }
-      } finally {
-        // пауза между любыми попытками
-        await sleep(BASE_DELAY_MS + jitter(120));
-      }
-    }
-    throw lastErr || new Error('REQUEST_FAILED');
-  }
-
-  // ========= UI категории/радиус =========
+  // отрисовка чекбоксов категорий
   function renderCats() {
-    const wrap = $('cats'); wrap.innerHTML = '';
+    const wrap = $('cats'); wrap.innerHTML='';
     DEFAULT_CATEGORIES.forEach(cat => {
       const label = document.createElement('label');
       label.className = 'chip';
       const input = document.createElement('input');
       input.type = 'checkbox';
-      input.checked = enabledKeys.includes(cat.key);
-      input.onchange = () => {
-        if (input.checked) enabledKeys = [...enabledKeys, cat.key];
-        else enabledKeys = enabledKeys.filter(k => k !== cat.key);
-        localStorage.setItem(LS_CATS, JSON.stringify(enabledKeys));
-      };
+      input.checked = true;
+      input.onchange = () => {};
       const span = document.createElement('span'); span.textContent = cat.label;
       label.append(input, span);
       wrap.appendChild(label);
     });
-  }
-
-  function setRadius(r) {
-    radius = r;
-    localStorage.setItem(LS_RADIUS, String(r));
-    $('hdrRadius').textContent = String(r);
-  }
-
-  function loadFromStorage() {
-    const cats = localStorage.getItem(LS_CATS);
-    if (cats) { try { enabledKeys = JSON.parse(cats); } catch{} }
-    const rad = localStorage.getItem(LS_RADIUS);
-    if (rad) radius = parseInt(rad,10) || 50;
   }
 
   function updateCounts() {
@@ -300,8 +184,7 @@
     $('parsedCount').textContent = String(parsed);
   }
 
-  function showResults(list) {
-    rows = list.slice();
+  function showResults(rows, radius) {
     const card = $('resultsCard');
     const wrap = $('results'); wrap.innerHTML = '';
     if (!rows.length) { card.style.display='none'; return; }
@@ -326,10 +209,12 @@
     $('exportBtn').disabled = rows.length===0;
   }
 
-  // ========= Основная проверка =========
   async function checkPoints() {
     const lines = $('coords').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
     const results = [];
+    const radius = RADIUS_STEPS[parseInt($('radiusSlider').value,10)] || 50;
+    $('hdrRadius').textContent = radius;
+
     $('checkBtn').disabled = true;
     $('checkBtn').textContent = 'Проверяю…';
 
@@ -343,11 +228,11 @@
         let minDist = Infinity; let nearest;
         let lastHttpError = null;
 
-        const activeCats = DEFAULT_CATEGORIES.filter(c=>enabledKeys.includes(c.key));
-        for (const cat of activeCats) {
+        for (const cat of DEFAULT_CATEGORIES) {
           for (const q of cat.queries) {
             try {
-              const { items } = await query2gisWithRetry(q, lat, lon, radius, 10, 3);
+              const data = await query2gis(q, lat, lon, radius);
+              const items = data?.result?.items || [];
               for (const it of items) {
                 const p = it?.point; const ilon = p?.lon; const ilat = p?.lat;
                 if (ilat==null || ilon==null) continue;
@@ -360,7 +245,7 @@
                 }
               }
             } catch (e) {
-              if (e?.isHttp) lastHttpError = e.message; else lastHttpError = 'NETWORK_ERROR';
+              lastHttpError = e.message;
             }
             if (minDist <= radius) break;
           }
@@ -369,7 +254,7 @@
 
         if (!isFinite(minDist)) {
           if (lastHttpError) results.push({ index:i, line:raw, status:'error', details:lastHttpError });
-          else results.push({ index:i, line:raw, status:'ok' }); // пусто — это OK
+          else results.push({ index:i, line:raw, status:'ok' });
         } else if (minDist <= radius) {
           results.push({ index:i, line:raw, status:'bad', nearest, minDist });
         } else {
@@ -382,11 +267,10 @@
     }
 
     results.sort((a,b)=>a.index-b.index);
-    showResults(results);
+    showResults(results, radius);
   }
 
-  // ========= Экспорт CSV =========
-  function exportCSV() {
+  function exportCSV(rows) {
     if (!rows.length) return;
     const header = 'index,line,status,minDist,nearest\n';
     const body = rows.map(r => [
@@ -403,177 +287,21 @@
     URL.revokeObjectURL(url);
   }
 
-// ========= OCR: извлечение координат с изображений (правка для Tesseract v4) =========
-const COORD_PATTERNS = [
-  /(-?\d{1,3}(?:[.,]\d+))\s*[,;\s]\s*(-?\d{1,3}(?:[.,]\d+))/g,                 // 55.123, 37.123
-  /(lat|широта)[^\d\-]*(-?\d{1,3}(?:[.,]\d+)).{0,15}(lon|long|долгота)[^\d\-]*(-?\d{1,3}(?:[.,]\d+))/gi, // lat.. lon..
-  /\b([NS])\s*(\d{1,3}(?:[.,]\d+)?)\s*[,\s;]\s*([EW])\s*(\d{1,3}(?:[.,]\d+)?)/gi, // N55.1 E37.2
-];
+  // события
+  $('coords').addEventListener('input', updateCounts);
+  $('checkBtn').addEventListener('click', checkPoints);
+  $('clearBtn').addEventListener('click', () => { $('coords').value=''; updateCounts(); showResults([]); });
+  $('exportBtn').addEventListener('click', () => exportCSV([]));
 
-function normalizePair(a, b) {
-  const toNum = (s)=> parseFloat(String(s).replace(',', '.'));
-  let lat = toNum(a), lon = toNum(b);
-  if (Math.abs(lat) > 90 && Math.abs(lon) <= 90) [lat, lon] = [lon, lat];
-  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
-  return { lat, lon };
-}
-
-function extractCoordsFromText(text) {
-  const found = [];
-  let m;
-
-  // паттерн 1
-  const p1 = new RegExp(COORD_PATTERNS[0]); p1.lastIndex = 0;
-  while ((m = p1.exec(text)) !== null) {
-    const pair = normalizePair(m[1], m[2]); if (pair) found.push(pair);
-  }
-
-  // паттерн 2
-  const p2 = new RegExp(COORD_PATTERNS[1]); p2.lastIndex = 0;
-  while ((m = p2.exec(text)) !== null) {
-    const pair = normalizePair(m[2], m[4]); if (pair) found.push(pair);
-  }
-
-  // паттерн 3
-  const p3 = new RegExp(COORD_PATTERNS[2]); p3.lastIndex = 0;
-  while ((m = p3.exec(text)) !== null) {
-    const signLat = m[1].toUpperCase()==='S' ? -1 : 1;
-    const signLon = m[3].toUpperCase()==='W' ? -1 : 1;
-    const lat = signLat * parseFloat(String(m[2]).replace(',', '.'));
-    const lon = signLon * parseFloat(String(m[4]).replace(',', '.'));
-    const pair = normalizePair(lat, lon); if (pair) found.push(pair);
-  }
-
-  return found;
-}
-
-function dedupePoints(points, precision = 6) {
-  const key = (p)=> `${p.lat.toFixed(precision)},${p.lon.toFixed(precision)}`;
-  const map = new Map();
-  for (const p of points) map.set(key(p), p);
-  return Array.from(map.values());
-}
-
-// Читаем файл как dataURL
-function readAsDataURL(file) {
-  return new Promise((res, rej) => {
-    const fr = new FileReader();
-    fr.onload = () => res(fr.result);
-    fr.onerror = rej;
-    fr.readAsDataURL(file);
-  });
-}
-
-// Главное: корректная инициализация Tesseract v4
-async function ocrExtractCoordsFromFiles(files) {
-  const progressEl = document.getElementById('ocrProgress');
-  const foundEl = document.getElementById('ocrFound');
-
-  if (!files || !files.length) {
-    foundEl.textContent = 'Файлы не выбраны.';
-    return [];
-  }
-
-  foundEl.textContent = '';
-  progressEl.style.display = 'block';
-  progressEl.textContent = `Подготовка… (0 / ${files.length})`;
-
-  // 1) создаём worker
-  const worker = await Tesseract.createWorker({
-    logger: m => {
-      // можно показать прогресс: if (m.status) progressEl.textContent = `${m.status}…`;
-    },
+  $('radiusSlider').addEventListener('input', (e) => {
+    const idx = parseInt(e.target.value, 10);
+    const r = RADIUS_STEPS[idx] ?? 50;
+    $('hdrRadius').textContent = r;
   });
 
-  // 2) грузим языки и инициализируем
-  await worker.loadLanguage('eng+rus');
-  await worker.initialize('eng+rus');
-
-  // (опционально) Параметры Tesseract
-  // Доступные: https://tesseract-ocr.github.io/tessdoc/Command-Line-Usage.html#config-files-and-augmenting-with-user-words
-  await worker.setParameters({
-    tessedit_pageseg_mode: Tesseract.PSM.AUTO,   // авто-сегментация страницы
-    preserve_interword_spaces: '1',              // слегка помогает формату "55.123, 37.123"
-  });
-
-  const results = [];
-  try {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      progressEl.textContent = `Распознаю ${i+1} / ${files.length} — ${file.name}`;
-
-      const dataURL = await readAsDataURL(file);
-
-      // 3) распознаём
-      const { data } = await worker.recognize(dataURL);
-      const text = data?.text || '';
-
-      // 4) парсим координаты
-      const pts = extractCoordsFromText(text);
-      if (pts.length) {
-        results.push(...pts);
-        const sample = pts.map(p => `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`).join(' · ');
-        foundEl.innerHTML += `<div>✅ ${file.name}: ${sample}</div>`;
-      } else {
-        foundEl.innerHTML += `<div>⚠️ ${file.name}: координаты не найдены</div>`;
-      }
-    }
-  } finally {
-    // 5) завершаем worker
-    await worker.terminate();
-    progressEl.style.display = 'none';
-  }
-
-  return dedupePoints(results, 6);
-}
-
-// Добавить найденные точки в textarea
-function appendPointsToTextarea(points) {
-  if (!points.length) return;
-  const ta = document.getElementById('coords');
-  const existing = ta.value.trim();
-  const lines = points.map(p => `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`).join('\n');
-  ta.value = existing ? (existing + '\n' + lines) : lines;
-  const evt = new Event('input'); ta.dispatchEvent(evt);
-}
-
-// Привязка кнопок OCR (оставь как было, но на всякий случай повторю)
-(function bindOCRUI(){
-  const input = document.getElementById('photosInput');
-  const btnStart = document.getElementById('ocrStartBtn');
-  const btnClear = document.getElementById('ocrClearBtn');
-  const foundEl = document.getElementById('ocrFound');
-
-  btnStart?.addEventListener('click', async () => {
-    if (!input.files || !input.files.length) {
-      foundEl.textContent = 'Сначала выберите фото.';
-      return;
-    }
-    btnStart.disabled = true;
-    btnStart.textContent = 'Распознаю…';
-    try {
-      const points = await ocrExtractCoordsFromFiles(input.files);
-      if (!points.length) {
-        foundEl.innerHTML += `<div class="small muted">Готово. Координаты не распознаны.</div>`;
-      } else {
-        appendPointsToTextarea(points);
-        foundEl.innerHTML += `<div class="small">Добавлено в список: ${points.length} точек</div>`;
-      }
-    } catch(e) {
-      foundEl.innerHTML += `<div>Ошибка OCR: ${String(e?.message || e)}</div>`;
-    } finally {
-      btnStart.disabled = false;
-      btnStart.textContent = '📷 Считать координаты';
-    }
-  });
-
-  btnClear?.addEventListener('click', () => {
-    const progress = document.getElementById('ocrProgress');
-    const found = document.getElementById('ocrFound');
-    if (input) input.value = '';
-    if (progress) { progress.style.display = 'none'; progress.textContent = ''; }
-    if (found) found.textContent = '';
-  });
+  // init
+  renderCats();
+  updateCounts();
 })();
 </script>
 
