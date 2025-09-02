@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <meta name="theme-color" content="#0ea5e9"/>
   <link rel="manifest" href="manifest.webmanifest"/>
-  <title>Проверка координат — POI (2ГИС)</title>
+  <title>Проверка координат — POI (2ГИС, без прокси)</title>
   <style>
     :root { color-scheme: light; --bg:#f8fafc; --card:#ffffff; --muted:#64748b; --text:#0f172a;
             --green:#dcfce7; --red:#fee2e2; --yellow:#fef3c7; --border:#e2e8f0; --primary:#0284c7; }
@@ -44,8 +44,8 @@
     <div class="header">
       <div class="icon">📍</div>
       <div>
-        <h1>Проверка координат (через 2ГИС)</h1>
-        <div class="muted" id="hdr">Радиус: <b id="hdrRadius">50</b> м • Прокси: <code id="hdrProxy">не задан</code></div>
+        <h1>Проверка координат (2ГИС)</h1>
+        <div class="muted">Радиус: <b id="hdrRadius">50</b> м • Прямой вызов API (ключ вшит)</div>
       </div>
     </div>
 
@@ -59,12 +59,6 @@
       </div>
 
       <div class="grid">
-        <div>
-          <label>URL прокси 2ГИС</label>
-          <input id="proxyUrl" type="text" placeholder="https://<твоя_поддомен>.workers.dev/2gis" />
-          <div class="small muted">Ключ 2ГИС хранится в прокси (секрет), тут он не светится.</div>
-        </div>
-
         <div>
           <label>Радиус</label>
           <input type="range" id="radiusSlider" min="0" max="3" step="1" value="2"/>
@@ -119,13 +113,14 @@
 
     <div class="spacer"></div>
     <div class="small muted">
-      PWA: Android — будет кнопка «Установить». iOS — «Поделиться» → «На экран домой».
+      PWA: Android — «Установить». iOS — «Поделиться» → «На экран домой».
     </div>
   </div>
 
 <script>
 (() => {
   // ---- Константы и состояние ----
+  const DGIS_API_KEY = '29be9032-3273-4d3c-88a4-6064edb8d02b'; // <= ТВОЙ КЛЮЧ 2ГИС (виден во фронтенде)
   const RADIUS_STEPS = [10, 25, 50, 100];
   const DEFAULT_CATEGORIES = [
     { key: 'school',       label:'Школы',         queries:['школа','лицей','гимназия'] },
@@ -138,13 +133,11 @@
   const LS_CATS   = 'poi_categories';
   const LS_RADIUS = 'poi_radius';
   const LS_PRESETS= 'poi_presets';
-  const LS_PROXY  = 'poi_proxy_url';
 
   let enabledKeys = [...DEFAULT_CATEGORIES.map(c => c.key)];
   let radius = 50;
   let presets = [];
   let rows = [];
-  let proxyUrl = localStorage.getItem(LS_PROXY) || '';
 
   // ---- Утилиты ----
   const $ = (id) => document.getElementById(id);
@@ -158,7 +151,7 @@
     return 2*R*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   };
 
-  // устойчивый парсер "55.12345, 37.12345" (+ вариации)
+  // Надежный парсер "55.12345, 37.12345" (+ вариации)
   const parsePoint = (line) => {
     if (!line) return null;
     let s = String(line).replace(/\u00A0/g, " ").replace(/[°]/g, " ");
@@ -174,7 +167,6 @@
     return { lat, lon };
   };
 
-  // ---- Инициализация UI ----
   function renderCats() {
     const wrap = $('cats'); wrap.innerHTML = '';
     DEFAULT_CATEGORIES.forEach(cat => {
@@ -219,12 +211,6 @@
     $('hdrRadius').textContent = String(r);
   }
 
-  function setProxy(url) {
-    proxyUrl = (url||'').trim();
-    localStorage.setItem(LS_PROXY, proxyUrl);
-    $('hdrProxy').textContent = proxyUrl ? proxyUrl : 'не задан';
-  }
-
   function updateCounts() {
     const lines = $('coords').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
     $('totalCount').textContent = String(lines.length);
@@ -236,6 +222,208 @@
     rows = list.slice();
     const card = $('resultsCard');
     const wrap = $('results'); wrap.innerHTML = '';
+    if (!rows.length) { card.style.display='none'; return; }
+    card.style.display='block';
+    rows.forEach(r => {
+      const d = document.createElement('div');
+      d.className = `item ${r.status}`;
+      const icon = r.status==='ok' ? '✅' : (r.status==='bad' ? '❌' : '⚠️');
+      const line = document.createElement('div'); line.style.flex='1';
+      line.innerHTML = `<div style="font-family:ui-monospace,monospace;font-size:13px">${r.line}</div>
+        <div class="small">
+          ${
+            r.status==='ok'    ? (r.minDist!=null?`Ближайший объект: ${Math.round(r.minDist)} м${r.nearest?` — ${r.nearest}`:''}`:'Совпадений нет — всё ок') :
+            r.status==='bad'   ? `Обнаружен объект ближе ${radius} м: ${Math.round(r.minDist||0)} м${r.nearest?` — ${r.nearest}`:''}` :
+            r.details ? r.details : 'Ошибка запроса'
+          }
+        </div>`;
+      const iconBox = document.createElement('div'); iconBox.style.width='24px'; iconBox.textContent = icon;
+      d.append(iconBox, line);
+      wrap.appendChild(d);
+    });
+    $('exportBtn').disabled = rows.length===0;
+  }
+
+  // ---- Основная проверка (напрямую в 2ГИС) ----
+  async function query2gis(q, lat, lon, radius, pageSize=10) {
+    // Строим URL 2ГИС: каталог, точка, радиус, сортировка по дистанции, нужные поля
+    const ps = new URLSearchParams({
+      q,
+      type: 'branch',
+      key: DGIS_API_KEY,
+      point: `${lon},${lat}`,          // 2ГИС ожидает "lon,lat"
+      radius: String(Math.min(Math.max(radius,1),3000)),
+      page_size: String(Math.min(Math.max(pageSize,1),10)), // на многих тарифах безопасно <=10
+      sort: 'distance',
+      fields: 'items.point,items.rubrics,items.name',
+    });
+    const url = `https://catalog.api.2gis.com/3.0/items?${ps.toString()}`;
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`;
+      try { const err = await resp.json(); if (err?.error) detail += ` — ${err.error}`; } catch {}
+      const e = new Error(detail);
+      e.isHttp = true;
+      throw e;
+    }
+    return resp.json(); // { result: { items: [...] } }
+  }
+
+  async function checkPoints() {
+    const lines = $('coords').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+    const results = [];
+    $('checkBtn').disabled = true;
+    $('checkBtn').textContent = 'Проверяю…';
+
+    try {
+      for (let i=0; i<lines.length; i++) {
+        const raw = lines[i];
+        const pt = parsePoint(raw);
+        if (!pt) { results.push({ index:i, line:raw, status:'error', details:'Не распознаны координаты' }); continue; }
+        const { lat, lon } = pt;
+
+        let minDist = Infinity; let nearest;
+        let lastHttpError = null;
+
+        const activeCats = DEFAULT_CATEGORIES.filter(c=>enabledKeys.includes(c.key));
+        for (const cat of activeCats) {
+          for (const q of cat.queries) {
+            try {
+              const data = await query2gis(q, lat, lon, radius, 10);
+              const items = data?.result?.items || data?.items || [];
+              // пустой ответ — это нормально: пробуем другие запросы, а в итоге это OK
+              for (const it of items) {
+                const p = it?.point;
+                const ilon = p?.lon;
+                const ilat = p?.lat;
+                if (ilat==null || ilon==null) continue;
+                const d = haversineMeters(lat, lon, ilat, ilon);
+                if (d < minDist) {
+                  minDist = d;
+                  const name = it?.name;
+                  const rubric = it?.rubrics && it.rubrics[0]?.name;
+                  nearest = name ? (name + (rubric ? ` (${rubric})` : '')) : undefined;
+                }
+              }
+            } catch (e) {
+              if (e?.isHttp) lastHttpError = e.message; // напр., HTTP 403/429
+              else lastHttpError = 'NETWORK_ERROR';
+            }
+
+            // щадящая пауза по лимитам
+            await sleep(60);
+
+            if (minDist <= radius) break;
+          }
+          if (minDist <= radius) break;
+        }
+
+        // Решение по строке:
+        if (!isFinite(minDist)) {
+          // ничего не нашли — это OK; но если было явное HTTP/NETWORK, покажем как error
+          if (lastHttpError) results.push({ index:i, line:raw, status:'error', details:lastHttpError });
+          else results.push({ index:i, line:raw, status:'ok' });
+        } else if (minDist <= radius) {
+          results.push({ index:i, line:raw, status:'bad', nearest, minDist });
+        } else {
+          results.push({ index:i, line:raw, status:'ok', nearest, minDist });
+        }
+      }
+    } finally {
+      $('checkBtn').disabled = false;
+      $('checkBtn').textContent = 'Проверить';
+    }
+
+    results.sort((a,b)=>a.index-b.index);
+    showResults(results);
+  }
+
+  // ---- Экспорт CSV ----
+  function exportCSV() {
+    if (!rows.length) return;
+    const header = 'index,line,status,minDist,nearest\n';
+    const body = rows.map(r => [
+      r.index,
+      `"${String(r.line).replaceAll('"','""')}"`,
+      r.status,
+      r.minDist ?? '',
+      r.nearest ? `"${String(r.nearest).replaceAll('"','""')}"` : ''
+    ].join(',')).join('\n');
+    const csv = header + body;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'poi_results.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ---- Пресеты ----
+  function savePreset() {
+    const name = $('presetName').value.trim(); if (!name) return;
+    const preset = { name, radius, enabledKeys };
+    presets = [...presets.filter(p=>p.name!==name), preset];
+    localStorage.setItem(LS_PRESETS, JSON.stringify(presets));
+    renderPresetSelect();
+    $('presetSelect').value = name;
+    $('presetName').value = '';
+  }
+  function applyPreset() {
+    const name = $('presetSelect').value;
+    const p = presets.find(x=>x.name===name); if (!p) return;
+    enabledKeys = p.enabledKeys.slice();
+    setRadius(p.radius);
+    $('radiusSlider').value = String(Math.max(0, RADIUS_STEPS.indexOf(p.radius)));
+    renderCats();
+  }
+  function deletePreset() {
+    const name = $('presetSelect').value; if (!name) return;
+    presets = presets.filter(p=>p.name!==name);
+    localStorage.setItem(LS_PRESETS, JSON.stringify(presets));
+    renderPresetSelect();
+  }
+
+  // ---- PWA Установка ----
+  let deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    $('installBtn').style.display = 'inline-block';
+  });
+  $('installBtn').addEventListener('click', async () => {
+    if (deferredPrompt) { await deferredPrompt.prompt(); $('installBtn').style.display = 'none'; }
+  });
+
+  // ---- Слушатели ----
+  $('coords').addEventListener('input', updateCounts);
+  $('checkBtn').addEventListener('click', checkPoints);
+  $('clearBtn').addEventListener('click', () => { $('coords').value=''; updateCounts(); showResults([]); });
+  $('exportBtn').addEventListener('click', exportCSV);
+  $('savePreset').addEventListener('click', savePreset);
+  $('presetSelect').addEventListener('change', applyPreset);
+  $('deletePreset').addEventListener('click', deletePreset);
+
+  $('radiusSlider').addEventListener('input', (e) => {
+    const idx = parseInt(e.target.value, 10);
+    const r = RADIUS_STEPS[idx] ?? 50;
+    setRadius(r);
+  });
+
+  // ---- Старт ----
+  loadFromStorage();
+  renderCats();
+  renderPresetSelect();
+  const idx = Math.max(0, RADIUS_STEPS.indexOf(radius));
+  $('radiusSlider').value = String(idx);
+  setRadius(radius);
+  updateCounts();
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+  }
+})();
+</script>
+</body>
+</html>
+ap = $('results'); wrap.innerHTML = '';
     if (!rows.length) { card.style.display='none'; return; }
     card.style.display='block';
     rows.forEach(r => {
