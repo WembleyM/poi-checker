@@ -151,17 +151,32 @@
   const metersToDegreeSpan = (lat, meters) => {
     const dLat = meters / 111320;
     const dLon = meters / (111320 * Math.cos((lat*Math.PI)/180) || 1e-6);
-    return { dLat: dLat*2.2, dLon: dLon*2.2 };
+    return { dLat: dLat*2.2, dLon: dLon*2.2 }; // чуть шире, чтобы API точно вернул объекты
   };
+
+  // 💡 НОВЫЙ НАДЁЖНЫЙ ПАРСЕР: понимает "55.12345, 37.12345" и родственные варианты
   const parsePoint = (line) => {
     if (!line) return null;
-    const raw = line.replace(/[;\\t]/g, ',').replace(/\\s+/g, ' ').trim().replace(/\\s*,\\s*/g, ',');
-    const m = raw.match(/^(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)(?:\\s*\\(.+\\))?$/);
-    if (!m) return null;
-    let a = parseFloat(m[1]), b = parseFloat(m[2]);
+    // нормализуем спецсимволы пробелов/градусов
+    let s = String(line).replace(/\u00A0/g, " ").replace(/[°]/g, " ");
+    // десятичную запятую между цифрами превращаем в точку: "55,12345" -> "55.12345"
+    s = s.replace(/(\d)\s*,\s*(?=\d)/g, "$1.");
+    // разделители между широтой и долготой (запятая/точка с запятой/таб/много пробелов) -> один пробел
+    s = s.replace(/[;,]/g, " ").replace(/\s+/g, " ").trim();
+    // вытаскиваем ПЕРВЫЕ ДВА числа (остальной текст игнорим)
+    const nums = s.match(/-?\d+(?:\.\d+)?/g);
+    if (!nums || nums.length < 2) return null;
+
+    const a = parseFloat(nums[0]);
+    const b = parseFloat(nums[1]);
+    if (!isFinite(a) || !isFinite(b)) return null;
+
+    // определяем, что есть lat/lon (если первая координата > 90 по модулю — это долгота)
     let lat, lon;
-    if (Math.abs(a) > 90 && Math.abs(b) <= 90) { lon=a; lat=b; } else { lat=a; lon=b; }
-    if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat)>90 || Math.abs(lon)>180) return null;
+    if (Math.abs(a) > 90 && Math.abs(b) <= 90) { lon = a; lat = b; }
+    else { lat = a; lon = b; }
+
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
     return { lat, lon };
   };
 
@@ -211,7 +226,7 @@
   }
 
   function updateCounts() {
-    const lines = $('coords').value.split(/\\n+/).map(s=>s.trim()).filter(Boolean);
+    const lines = $('coords').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
     $('totalCount').textContent = String(lines.length);
     const parsed = lines.reduce((acc, l)=> acc + (parsePoint(l)?1:0), 0);
     $('parsedCount').textContent = String(parsed);
@@ -245,7 +260,7 @@
 
   // ---- Проверка точек ----
   async function checkPoints() {
-    const lines = $('coords').value.split(/\\n+/).map(s=>s.trim()).filter(Boolean);
+    const lines = $('coords').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
     const results = [];
     $('checkBtn').disabled = true;
     $('checkBtn').textContent = 'Проверяю…';
@@ -287,7 +302,7 @@
                 }
               }
             } catch (e) {
-              // Игнорируем; ниже агрегированно покажем
+              // тихо игнорируем конкретный запрос; совокупный статус покажем ниже
             }
             if (minDist <= radius) break;
           }
@@ -310,14 +325,14 @@
   // ---- Экспорт CSV ----
   function exportCSV() {
     if (!rows.length) return;
-    const header = 'index,line,status,minDist,nearest\\n';
+    const header = 'index,line,status,minDist,nearest\n';
     const body = rows.map(r => [
       r.index,
-      `\"${String(r.line).replaceAll('\"','\"\"')}\"`,
+      `"${String(r.line).replaceAll('"','""')}"`,
       r.status,
       r.minDist ?? '',
-      r.nearest ? `\"${String(r.nearest).replaceAll('\"','\"\"')}\"` : ''
-    ].join(',')).join('\\n');
+      r.nearest ? `"${String(r.nearest).replaceAll('"','""')}"` : ''
+    ].join(',')).join('\n');
     const csv = header + body;
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
