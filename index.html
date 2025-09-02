@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <meta name="theme-color" content="#0ea5e9"/>
   <link rel="manifest" href="manifest.webmanifest"/>
-  <title>Проверка координат — POI</title>
+  <title>Проверка координат — POI (2ГИС)</title>
   <style>
     :root { color-scheme: light; --bg:#f8fafc; --card:#ffffff; --muted:#64748b; --text:#0f172a;
             --green:#dcfce7; --red:#fee2e2; --yellow:#fef3c7; --border:#e2e8f0; --primary:#0284c7; }
@@ -44,8 +44,8 @@
     <div class="header">
       <div class="icon">📍</div>
       <div>
-        <h1>Проверка координат</h1>
-        <div class="muted" id="hdr">Прямой доступ к Яндекс.Картам • Радиус: <b id="hdrRadius">50</b> м</div>
+        <h1>Проверка координат (через 2ГИС)</h1>
+        <div class="muted" id="hdr">Радиус: <b id="hdrRadius">50</b> м • Прокси: <code id="hdrProxy">не задан</code></div>
       </div>
     </div>
 
@@ -59,6 +59,12 @@
       </div>
 
       <div class="grid">
+        <div>
+          <label>URL прокси 2ГИС</label>
+          <input id="proxyUrl" type="text" placeholder="https://<твоя_поддомен>.workers.dev/2gis" />
+          <div class="small muted">Ключ 2ГИС хранится в прокси (секрет), тут он не светится.</div>
+        </div>
+
         <div>
           <label>Радиус</label>
           <input type="range" id="radiusSlider" min="0" max="3" step="1" value="2"/>
@@ -113,7 +119,7 @@
 
     <div class="spacer"></div>
     <div class="small muted">
-      PWA: для iOS — «Поделиться» → «На экран домой». Для Android — появится кнопка «Установить».
+      PWA: Android — будет кнопка «Установить». iOS — «Поделиться» → «На экран домой».
     </div>
   </div>
 
@@ -128,55 +134,43 @@
     { key: 'kids_club',    label:'Детские секции',queries:['детская секция','детский кружок','детский клуб','ДЮСШ'] },
     { key: 'court',        label:'Суды',          queries:['суд','мировой суд','районный суд'] },
   ];
-  const API_KEY = 'b70428e4-77f9-42fb-8d22-5c9834aa214f'; // Твой ключ Яндекса
 
-  const LS_CATS = 'poi_categories';
+  const LS_CATS   = 'poi_categories';
   const LS_RADIUS = 'poi_radius';
-  const LS_PRESETS = 'poi_presets';
+  const LS_PRESETS= 'poi_presets';
+  const LS_PROXY  = 'poi_proxy_url';
 
   let enabledKeys = [...DEFAULT_CATEGORIES.map(c => c.key)];
   let radius = 50;
   let presets = [];
-  let rows = []; // последние результаты для экспорта
+  let rows = [];
+  let proxyUrl = localStorage.getItem(LS_PROXY) || '';
 
   // ---- Утилиты ----
   const $ = (id) => document.getElementById(id);
   const toRad = (v) => (v * Math.PI) / 180;
+  const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+
   const haversineMeters = (lat1, lon1, lat2, lon2) => {
     const R = 6371000;
     const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
     const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
     return 2*R*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   };
-  const metersToDegreeSpan = (lat, meters) => {
-    const dLat = meters / 111320;
-    const dLon = meters / (111320 * Math.cos((lat*Math.PI)/180) || 1e-6);
-    return { dLat: dLat*2.2, dLon: dLon*2.2 }; // чуть шире, чтобы API точно вернул объекты
-  };
 
-  // 💡 НОВЫЙ НАДЁЖНЫЙ ПАРСЕР: понимает "55.12345, 37.12345" и родственные варианты
+  // устойчивый парсер "55.12345, 37.12345" (+ вариации)
   const parsePoint = (line) => {
     if (!line) return null;
-    // нормализуем спецсимволы пробелов/градусов
     let s = String(line).replace(/\u00A0/g, " ").replace(/[°]/g, " ");
-    // десятичную запятую между цифрами превращаем в точку: "55,12345" -> "55.12345"
-    s = s.replace(/(\d)\s*,\s*(?=\d)/g, "$1.");
-    // разделители между широтой и долготой (запятая/точка с запятой/таб/много пробелов) -> один пробел
+    s = s.replace(/(\d)\s*,\s*(?=\d)/g, "$1."); // десятичная запятая -> точка
     s = s.replace(/[;,]/g, " ").replace(/\s+/g, " ").trim();
-    // вытаскиваем ПЕРВЫЕ ДВА числа (остальной текст игнорим)
     const nums = s.match(/-?\d+(?:\.\d+)?/g);
     if (!nums || nums.length < 2) return null;
-
-    const a = parseFloat(nums[0]);
-    const b = parseFloat(nums[1]);
+    const a = parseFloat(nums[0]), b = parseFloat(nums[1]);
     if (!isFinite(a) || !isFinite(b)) return null;
-
-    // определяем, что есть lat/lon (если первая координата > 90 по модулю — это долгота)
     let lat, lon;
-    if (Math.abs(a) > 90 && Math.abs(b) <= 90) { lon = a; lat = b; }
-    else { lat = a; lon = b; }
-
-    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    if (Math.abs(a) > 90 && Math.abs(b) <= 90) { lon=a; lat=b; } else { lat=a; lon=b; }
+    if (Math.abs(lat)>90 || Math.abs(lon)>180) return null;
     return { lat, lon };
   };
 
@@ -225,6 +219,12 @@
     $('hdrRadius').textContent = String(r);
   }
 
+  function setProxy(url) {
+    proxyUrl = (url||'').trim();
+    localStorage.setItem(LS_PROXY, proxyUrl);
+    $('hdrProxy').textContent = proxyUrl ? proxyUrl : 'не задан';
+  }
+
   function updateCounts() {
     const lines = $('coords').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
     $('totalCount').textContent = String(lines.length);
@@ -246,9 +246,9 @@
       line.innerHTML = `<div style="font-family:ui-monospace,monospace;font-size:13px">${r.line}</div>
         <div class="small">
           ${
-            r.status==='ok'    ? (r.minDist!=null?`Ближайший объект: ${Math.round(r.minDist)} м${r.nearest?` — ${r.nearest}`:''}`:'Нет данных') :
+            r.status==='ok'    ? (r.minDist!=null?`Ближайший объект: ${Math.round(r.minDist)} м${r.nearest?` — ${r.nearest}`:''}`:'Совпадений нет — всё ок') :
             r.status==='bad'   ? `Обнаружен объект ближе ${radius} м: ${Math.round(r.minDist||0)} м${r.nearest?` — ${r.nearest}`:''}` :
-                                 (r.details||'Ошибка запроса')
+            r.details ? r.details : 'Ошибка запроса'
           }
         </div>`;
       const iconBox = document.createElement('div'); iconBox.style.width='24px'; iconBox.textContent = icon;
@@ -258,12 +258,18 @@
     $('exportBtn').disabled = rows.length===0;
   }
 
-  // ---- Проверка точек ----
+  // ---- Проверка точек через прокси 2ГИС ----
   async function checkPoints() {
     const lines = $('coords').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
     const results = [];
     $('checkBtn').disabled = true;
     $('checkBtn').textContent = 'Проверяю…';
+
+    if (!proxyUrl) {
+      alert('Заполни URL прокси 2ГИС в настройках.');
+      $('checkBtn').disabled = false; $('checkBtn').textContent = 'Проверить';
+      return;
+    }
 
     try {
       for (let i=0; i<lines.length; i++) {
@@ -271,47 +277,73 @@
         const pt = parsePoint(raw);
         if (!pt) { results.push({ index:i, line:raw, status:'error', details:'Не распознаны координаты' }); continue; }
         const { lat, lon } = pt;
-        const { dLat, dLon } = metersToDegreeSpan(lat, radius);
 
         let minDist = Infinity; let nearest;
-        for (const cat of DEFAULT_CATEGORIES.filter(c=>enabledKeys.includes(c.key))) {
+        let lastHttpError = null;
+
+        const activeCats = DEFAULT_CATEGORIES.filter(c=>enabledKeys.includes(c.key));
+        for (const cat of activeCats) {
           for (const q of cat.queries) {
             try {
-              const params = new URLSearchParams({
-                apikey: API_KEY,
-                lang: 'ru_RU',
-                type: 'biz',
-                ll: `${lon},${lat}`,
-                spn: `${Math.max(dLon,1e-5)},${Math.max(dLat,1e-5)}`,
-                results: '50',
-                text: q,
+              const payload = { q, point: { lat, lon }, radius, page_size: 25, sort: 'distance' };
+              const resp = await fetch(proxyUrl, {
+                method:'POST',
+                headers:{ 'Content-Type':'application/json' },
+                body: JSON.stringify(payload),
               });
-              const resp = await fetch(`https://search-maps.yandex.ru/v1/?${params.toString()}`);
-              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-              const data = await resp.json();
-              const feats = data?.features || [];
-              for (const f of feats) {
-                const coords = f?.geometry?.coordinates; // [lon, lat]
-                if (!coords) continue;
-                const d = haversineMeters(lat, lon, coords[1], coords[0]);
-                if (d < minDist) {
-                  minDist = d;
-                  const name = f?.properties?.name || f?.properties?.CompanyMetaData?.name;
-                  const catName = f?.properties?.CompanyMetaData?.Categories?.[0]?.name;
-                  nearest = name ? (name + (catName ? ` (${catName})` : '')) : undefined;
+              if (!resp.ok) {
+                lastHttpError = `HTTP ${resp.status}`;
+                // попробуем прочесть тело
+                try {
+                  const err = await resp.json();
+                  if (err?.error) lastHttpError += ` — ${err.error}`;
+                } catch {}
+                // не прерываем — возможно другая фраза q вернёт ответ
+              } else {
+                const data = await resp.json();
+                const items = data?.items || data?.result?.items || [];
+                // пустой ответ — это НОРМА (OK), но продолжаем попытки другим q в пределах категории
+                for (const it of items) {
+                  const p = it?.point || it?.geometry?.centroid || it?.centroid;
+                  const ilon = p?.lon ?? p?.lng ?? p?.lonLat?.[0];
+                  const ilat = p?.lat ?? p?.latLng ?? p?.lonLat?.[1];
+                  if (ilat==null || ilon==null) continue;
+                  const d = haversineMeters(lat, lon, ilat, ilon);
+                  if (d < minDist) {
+                    minDist = d;
+                    const name = it?.name || it?.caption || it?.address_name || it?.full_name;
+                    const rubric = it?.rubrics && it.rubrics[0]?.name;
+                    nearest = name ? (name + (rubric ? ` (${rubric})` : '')) : undefined;
+                  }
                 }
               }
             } catch (e) {
-              // тихо игнорируем конкретный запрос; совокупный статус покажем ниже
+              // сетевой сбой — фиксируем, но не падаем
+              if (!lastHttpError) lastHttpError = 'NETWORK_ERROR';
             }
+
+            // щадим лимиты — микропаузa
+            await sleep(60);
+
             if (minDist <= radius) break;
           }
           if (minDist <= radius) break;
         }
 
-        if (!isFinite(minDist)) { results.push({ index:i, line:raw, status:'error', details:'Нет ответа от API' }); continue; }
-        if (minDist <= radius) results.push({ index:i, line:raw, status:'bad', nearest, minDist });
-        else results.push({ index:i, line:raw, status:'ok', nearest, minDist });
+        // Решение по строке:
+        if (!isFinite(minDist)) {
+          // Ни один запрос ничего не вернул/все пусто -> это OK (ничего опасного рядом)
+          // Если при этом были явные HTTP-ошибки — покажем отдельную строку-ошибку.
+          if (lastHttpError) {
+            results.push({ index:i, line:raw, status:'error', details:lastHttpError });
+          } else {
+            results.push({ index:i, line:raw, status:'ok' });
+          }
+        } else if (minDist <= radius) {
+          results.push({ index:i, line:raw, status:'bad', nearest, minDist });
+        } else {
+          results.push({ index:i, line:raw, status:'ok', nearest, minDist });
+        }
       }
     } finally {
       $('checkBtn').disabled = false;
@@ -355,7 +387,6 @@
     const p = presets.find(x=>x.name===name); if (!p) return;
     enabledKeys = p.enabledKeys.slice();
     setRadius(p.radius);
-    // обновим UI
     $('radiusSlider').value = String(Math.max(0, RADIUS_STEPS.indexOf(p.radius)));
     renderCats();
   }
@@ -392,6 +423,8 @@
     setRadius(r);
   });
 
+  $('proxyUrl').addEventListener('input', e => setProxy(e.target.value));
+
   // ---- Старт ----
   loadFromStorage();
   renderCats();
@@ -399,9 +432,10 @@
   const idx = Math.max(0, RADIUS_STEPS.indexOf(radius));
   $('radiusSlider').value = String(idx);
   setRadius(radius);
+  $('proxyUrl').value = proxyUrl;
+  setProxy(proxyUrl);
   updateCounts();
 
-  // Регистрируем service worker (для PWA)
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
   }
