@@ -104,8 +104,206 @@
   </div>
 
 <script>
-// весь JS-код вынесен в один <script>, ничего лишнего на страницу не падает
-// (см. версию, которую я собрал: с антибаном, кэшем и работающими кнопками)
+(() => {
+  const DGIS_API_KEY = '29be9032-3273-4d3c-88a4-6064edb8d02b';
+  const RADIUS_STEPS = [10, 25, 50, 100];
+  const DEFAULT_CATEGORIES = [
+    { key: 'school', label:'Школы', queries:['школа','лицей','гимназия'] },
+    { key: 'kindergarten', label:'Детские сады', queries:['детский сад','ясли'] },
+    { key: 'police', label:'Полиция', queries:['полиция','отдел полиции'] },
+    { key: 'kids_club', label:'Детские секции', queries:['детская секция','детский кружок','детский клуб','ДЮСШ'] },
+    { key: 'court', label:'Суды', queries:['суд','мировой суд','районный суд'] },
+  ];
+
+  const $ = (id) => document.getElementById(id);
+  const toRad = (v) => (v * Math.PI) / 180;
+  const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+  const jitter = (base)=> Math.floor(base + Math.random()*base);
+
+  const haversineMeters = (lat1, lon1, lat2, lon2) => {
+    const R = 6371000;
+    const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+    return 2*R*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  };
+
+  const parsePoint = (line) => {
+    if (!line) return null;
+    let s = String(line).replace(/\u00A0/g," ").replace(/[°]/g," ");
+    s = s.replace(/(\d)\s*,\s*(?=\d)/g, "$1.");
+    s = s.replace(/[;,]/g," ").replace(/\s+/g," ").trim();
+    const nums = s.match(/-?\d+(?:\.\d+)?/g);
+    if (!nums || nums.length < 2) return null;
+    const a = parseFloat(nums[0]), b = parseFloat(nums[1]);
+    if (!isFinite(a) || !isFinite(b)) return null;
+    let lat, lon;
+    if (Math.abs(a) > 90 && Math.abs(b) <= 90) { lon=a; lat=b; } else { lat=a; lon=b; }
+    if (Math.abs(lat)>90 || Math.abs(lon)>180) return null;
+    return { lat, lon };
+  };
+
+  async function query2gis(q, lat, lon, radius) {
+    const ps = new URLSearchParams({
+      q, type:'branch', key:DGIS_API_KEY,
+      point:`${lon},${lat}`,
+      radius:String(Math.min(Math.max(radius,1),3000)),
+      page_size:'10',
+      sort:'distance',
+      fields:'items.point,items.rubrics,items.name',
+    });
+    const url = `https://catalog.api.2gis.com/3.0/items?${ps.toString()}`;
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`;
+      try { const err = await resp.json(); if (err?.error) detail += ' — '+err.error; } catch{}
+      throw new Error(detail);
+    }
+    return resp.json();
+  }
+
+  // отрисовка чекбоксов категорий
+  function renderCats() {
+    const wrap = $('cats'); wrap.innerHTML='';
+    DEFAULT_CATEGORIES.forEach(cat => {
+      const label = document.createElement('label');
+      label.className = 'chip';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = true;
+      input.onchange = () => {};
+      const span = document.createElement('span'); span.textContent = cat.label;
+      label.append(input, span);
+      wrap.appendChild(label);
+    });
+  }
+
+  function updateCounts() {
+    const lines = $('coords').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+    $('totalCount').textContent = String(lines.length);
+    const parsed = lines.reduce((acc, l)=> acc + (parsePoint(l)?1:0), 0);
+    $('parsedCount').textContent = String(parsed);
+  }
+
+  function showResults(rows, radius) {
+    const card = $('resultsCard');
+    const wrap = $('results'); wrap.innerHTML = '';
+    if (!rows.length) { card.style.display='none'; return; }
+    card.style.display='block';
+    rows.forEach(r => {
+      const d = document.createElement('div');
+      d.className = `item ${r.status}`;
+      const icon = r.status==='ok' ? '✅' : (r.status==='bad' ? '❌' : '⚠️');
+      const line = document.createElement('div'); line.style.flex='1';
+      line.innerHTML = `<div style="font-family:ui-monospace,monospace;font-size:13px">${r.line}</div>
+        <div class="small">
+          ${
+            r.status==='ok'    ? (r.minDist!=null?`Ближайший объект: ${Math.round(r.minDist)} м${r.nearest?` — ${r.nearest}`:''}`:'Совпадений нет — всё ок') :
+            r.status==='bad'   ? `Обнаружен объект ближе ${radius} м: ${Math.round(r.minDist||0)} м${r.nearest?` — ${r.nearest}`:''}` :
+            r.details ? r.details : 'Ошибка запроса'
+          }
+        </div>`;
+      const iconBox = document.createElement('div'); iconBox.style.width='24px'; iconBox.textContent = icon;
+      d.append(iconBox, line);
+      wrap.appendChild(d);
+    });
+    $('exportBtn').disabled = rows.length===0;
+  }
+
+  async function checkPoints() {
+    const lines = $('coords').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+    const results = [];
+    const radius = RADIUS_STEPS[parseInt($('radiusSlider').value,10)] || 50;
+    $('hdrRadius').textContent = radius;
+
+    $('checkBtn').disabled = true;
+    $('checkBtn').textContent = 'Проверяю…';
+
+    try {
+      for (let i=0; i<lines.length; i++) {
+        const raw = lines[i];
+        const pt = parsePoint(raw);
+        if (!pt) { results.push({ index:i, line:raw, status:'error', details:'Не распознаны координаты' }); continue; }
+        const { lat, lon } = pt;
+
+        let minDist = Infinity; let nearest;
+        let lastHttpError = null;
+
+        for (const cat of DEFAULT_CATEGORIES) {
+          for (const q of cat.queries) {
+            try {
+              const data = await query2gis(q, lat, lon, radius);
+              const items = data?.result?.items || [];
+              for (const it of items) {
+                const p = it?.point; const ilon = p?.lon; const ilat = p?.lat;
+                if (ilat==null || ilon==null) continue;
+                const d = haversineMeters(lat, lon, ilat, ilon);
+                if (d < minDist) {
+                  minDist = d;
+                  const name = it?.name;
+                  const rubric = it?.rubrics && it.rubrics[0]?.name;
+                  nearest = name ? (name + (rubric ? ` (${rubric})` : '')) : undefined;
+                }
+              }
+            } catch (e) {
+              lastHttpError = e.message;
+            }
+            if (minDist <= radius) break;
+          }
+          if (minDist <= radius) break;
+        }
+
+        if (!isFinite(minDist)) {
+          if (lastHttpError) results.push({ index:i, line:raw, status:'error', details:lastHttpError });
+          else results.push({ index:i, line:raw, status:'ok' });
+        } else if (minDist <= radius) {
+          results.push({ index:i, line:raw, status:'bad', nearest, minDist });
+        } else {
+          results.push({ index:i, line:raw, status:'ok', nearest, minDist });
+        }
+      }
+    } finally {
+      $('checkBtn').disabled = false;
+      $('checkBtn').textContent = 'Проверить';
+    }
+
+    results.sort((a,b)=>a.index-b.index);
+    showResults(results, radius);
+  }
+
+  function exportCSV(rows) {
+    if (!rows.length) return;
+    const header = 'index,line,status,minDist,nearest\n';
+    const body = rows.map(r => [
+      r.index,
+      '"' + String(r.line).replace(/"/g,'""') + '"',
+      r.status,
+      r.minDist ?? '',
+      r.nearest ? '"' + String(r.nearest).replace(/"/g,'""') + '"' : ''
+    ].join(',')).join('\n');
+    const csv = header + body;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'poi_results.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // события
+  $('coords').addEventListener('input', updateCounts);
+  $('checkBtn').addEventListener('click', checkPoints);
+  $('clearBtn').addEventListener('click', () => { $('coords').value=''; updateCounts(); showResults([]); });
+  $('exportBtn').addEventListener('click', () => exportCSV([]));
+
+  $('radiusSlider').addEventListener('input', (e) => {
+    const idx = parseInt(e.target.value, 10);
+    const r = RADIUS_STEPS[idx] ?? 50;
+    $('hdrRadius').textContent = r;
+  });
+
+  // init
+  renderCats();
+  updateCounts();
+})();
 </script>
+
 </body>
 </html>
