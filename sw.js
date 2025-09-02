@@ -1,5 +1,7 @@
-const CACHE_NAME = 'poi-checker-v1';
+const CACHE_NAME = 'poi-checker-v2';
+
 self.addEventListener('install', e => self.skipWaiting());
+
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
     const keys = await caches.keys();
@@ -7,6 +9,7 @@ self.addEventListener('activate', e => {
   })());
   self.clients.claim();
 });
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (new URL(req.url).origin === self.location.origin) {
